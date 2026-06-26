@@ -10,16 +10,12 @@ import json
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
-from PIL import Image
 
 load_dotenv()
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 VISION_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-
-# 多模态图片最大边长（超过此值等比缩放以保证传输速度和清晰度）
-VISION_MAX_SIDE = 1200
 
 
 def _encode_image(image_path: str) -> str:
@@ -69,29 +65,12 @@ def _call_text_api(prompt: str, max_tokens: int = 1024) -> dict:
 def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> dict:
     """
     调用 DeepSeek 多模态 API。
-    若图片边长超过 VISION_MAX_SIDE 则等比缩放，保持 PNG 无损格式。
     返回: {"success": bool, "content": str} 或 {"success": False, "error": str}
     """
-    # 检查图片尺寸，超过 1200px 则等比缩放
-    img = Image.open(image_path)
-    w, h = img.size
     file_size_kb = Path(image_path).stat().st_size / 1024
+    print(f"[Vision] 图片尺寸: {file_size_kb:.0f}KB")
 
-    actual_path = image_path
-    if max(w, h) > VISION_MAX_SIDE:
-        ratio = VISION_MAX_SIDE / max(w, h)
-        new_w, new_h = int(w * ratio), int(h * ratio)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-        resized_path = str(Path(image_path).with_suffix('.vision_resized.png'))
-        img.save(resized_path, format='PNG')
-        resized_kb = Path(resized_path).stat().st_size / 1024
-        print(f"[Vision] 图片缩放: {w}x{h} ({file_size_kb:.0f}KB) → "
-              f"{new_w}x{new_h} ({resized_kb:.0f}KB)")
-        actual_path = resized_path
-    else:
-        print(f"[Vision] 图片尺寸: {w}x{h} ({file_size_kb:.0f}KB), 无需缩放")
-
-    image_b64 = _encode_image(actual_path)
+    image_b64 = _encode_image(image_path)
     b64_kb = len(image_b64) / 1024
     print(f"[Vision] base64 编码: {b64_kb:.0f}KB")
 

@@ -362,7 +362,7 @@ def set_region_interactive(parent, region_name: str = None) -> bool:
 
 
 def capture_selection(parent, use_saved: bool = True) -> Optional[Image.Image]:
-    """截图函数：优先使用保存的区域，否则弹出框选"""
+    """截图函数：优先使用保存的区域，否则全屏截图"""
     if use_saved:
         region = get_current_region()
         if region:
@@ -370,10 +370,9 @@ def capture_selection(parent, use_saved: bool = True) -> Optional[Image.Image]:
             try:
                 return ImageGrab.grab(bbox=bbox, all_screens=True)
             except Exception:
-                pass  # 坐标越界，降级为框选
+                pass  # 坐标越界，降级为全屏
 
-    overlay = SelectionOverlay(parent)
-    return overlay.run()
+    return ImageGrab.grab(all_screens=True)
 
 
 # ── 通知展示 ──
