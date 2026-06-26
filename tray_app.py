@@ -1714,33 +1714,20 @@ class TrayApplication:
             while True:
                 data = self.result_queue.get_nowait()
                 if data["type"] == "interview":
-                    suggestions = data["suggestions"]
-                    first_suggestion = ""
-                    if isinstance(suggestions, str):
-                        first_suggestion = suggestions.split('\n')[0][:60] if suggestions else "分析完成"
-                    elif isinstance(suggestions, list) and suggestions:
-                        first_suggestion = suggestions[0][:60]
-
-                    show_notification(
-                        f'面试助手 {data["company_name"]}',
-                        first_suggestion
+                    show_result_popup(
+                        self.root,
+                        data["suggestions"],
+                        data["ocr_text"],
+                        data["company_name"]
                     )
                 elif data["type"] == "interview_feedback":
-                    show_notification(
-                        f'面试助手(含评估) {data["company_name"]}',
-                        '分析完成，含面试官视角评估'
-                    )
+                    show_interview_feedback_popup(self.root, data)
                 elif data["type"] == "job":
-                    result_data = data["data"]
-                    match_score = result_data.get('match_score', 0)
-                    pitfall = result_data.get('pitfall_assessment', '')
-                    summary = f'匹配度: {match_score}%'
-                    if pitfall:
-                        summary += f' ⚠{pitfall[:30]}'
-                    show_notification(
-                        f'岗位分析 {data["company_name"]}',
-                        summary
-                    )
+                    show_job_result_popup(self.root, {
+                        **data["data"],
+                        "company_name": data["company_name"],
+                        "window_title": data["window_title"],
+                    })
                 elif data["type"] == "error":
                     show_notification('求职助手', data.get("message", "分析失败"))
 
