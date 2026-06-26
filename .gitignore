@@ -1,0 +1,20 @@
+# API keys & secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Personal data
+resume.txt
+image.png
+image/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
