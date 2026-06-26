@@ -48,7 +48,7 @@ def _call_text_api(prompt: str, max_tokens: int = 1024) -> dict:
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30
+            timeout=90
         )
         if response.status_code == 200:
             result = response.json()
@@ -57,7 +57,7 @@ def _call_text_api(prompt: str, max_tokens: int = 1024) -> dict:
         else:
             return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
     except requests.Timeout:
-        return {"success": False, "error": "请求超时（30秒）"}
+        return {"success": False, "error": "请求超时（90秒）"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -97,7 +97,7 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30
+            timeout=(30, 120)  # (connect, read): 连接30秒，读取120秒（图片上传+推理）
         )
 
         if response.status_code == 200:
@@ -107,7 +107,24 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
         else:
             return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
     except requests.Timeout:
-        return {"success": False, "error": "请求超时（30秒）"}
+        print("[Vision] 首次请求超时，重试一次...")
+        try:
+            response = requests.post(
+                f"{DEEPSEEK_BASE_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=(30, 120)
+            )
+            if response.status_code == 200:
+                result = response.json()
+                content = result["choices"][0]["message"]["content"]
+                return {"success": True, "content": content}
+            else:
+                return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+        except requests.Timeout:
+            return {"success": False, "error": "请求超时（120秒重试后仍失败）"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
