@@ -1030,7 +1030,14 @@ def analyze_job_screenshot(image_path: str, company_id: int = None,
 
         # 用字符串拼接而非 f-string，避免 OCR 文本中的 {} 被误解析
         system_prompt = (
-            "你是资深职业顾问。分析以下岗位JD，输出严格JSON格式（不要包含其他文字）：\n\n"
+            "你是资深职业顾问。分析以下岗位JD，输出严格JSON格式（不要包含其他文字）。\n\n"
+            + "【强制要求】以下所有字段都必须输出，即使没有信息也要输出默认值：\n"
+            + "- pitfall_assessment: 必须有内容，无坑则写\"无明显坑位，建议正常投递\"\n"
+            + "- match_score: 必须有0-100的整数\n"
+            + "- strengths: 必须输出数组，至少2条\n"
+            + "- gaps: 必须输出数组，至少2条\n"
+            + "- resume_advice: 必须有简历修改建议\n"
+            + "- self_intro: 必须有自荐话术\n\n"
             + "公司：" + company_name + "\n"
             + "公司备注：" + company_notes + resume_block + "\n\n"
             + "岗位JD（OCR识别）：\n" + ocr_text[:3000] + "\n\n"
@@ -1043,7 +1050,7 @@ def analyze_job_screenshot(image_path: str, company_id: int = None,
             + '  "resume_advice": "简历修改建议，3-5条用\\n分隔",\n'
             + '  "self_intro": "您好，看到贵司在招XX岗位，我有X年XX经验，熟悉JD中提到的XX和XX，做过XX项目，期待有机会沟通。"\n'
             + "}\n\n"
-            + "注意：self_intro 是一句完整的打招呼消息，像BOSS直聘上发给HR的第一句话。必须提到JD中的具体技术栈或要求，语气自然不做作。"
+            + "注意：self_intro 必须提到JD中的具体技术栈，语气自然不做作。缺少任何字段都会导致错误。"
         )
 
         parsed = None
@@ -1084,14 +1091,11 @@ def analyze_job_screenshot(image_path: str, company_id: int = None,
             print(f"[分析] LLM调用异常: {e}")
 
         if parsed is None:
-            parsed = {
-                "pitfall_assessment": "LLM响应解析失败",
-                "match_score": 0,
-                "strengths": [],
-                "gaps": [],
-                "resume_advice": "",
-                "self_intro": ""
-            }
+            parsed = {}
+
+        # 自动补全缺失字段（vision_analyzer 中同样的保护逻辑）
+        from vision_analyzer import _ensure_job_analysis_fields
+        parsed = _ensure_job_analysis_fields(parsed)
 
         result["pitfall_assessment"] = str(parsed.get("pitfall_assessment", ""))
         try:

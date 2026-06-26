@@ -124,6 +124,26 @@ def _parse_json_response(content: str) -> dict:
     return json.loads(content.strip())
 
 
+# 岗位分析结果默认值（LLM 遗漏字段时自动补全）
+JOB_ANALYSIS_DEFAULTS = {
+    "pitfall_assessment": "无明显坑位，建议正常投递",
+    "match_score": 50,
+    "strengths": [],
+    "gaps": [],
+    "resume_advice": "建议根据岗位JD调整简历关键词，突出相关经验",
+    "self_intro": "您好，看到贵司在招相关岗位，我有相关经验，期待有机会沟通。",
+}
+
+
+def _ensure_job_analysis_fields(result: dict) -> dict:
+    """确保岗位分析结果包含所有必需字段，缺失则补默认值"""
+    for key, default in JOB_ANALYSIS_DEFAULTS.items():
+        val = result.get(key)
+        if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
+            result[key] = default
+    return result
+
+
 def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
     """
     使用多模态模型分析岗位 JD 截图
@@ -131,9 +151,19 @@ def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
     """
     # 用字符串拼接而非 f-string，避免简历中的 {} 被误解析
     lines = [
-        "你是专业求职顾问。分析这张岗位JD截图，输出严格JSON（不要markdown包裹）:",
+        "你是一个专业的求职顾问。分析这张岗位JD截图，必须输出严格完整的JSON。",
+        "",
+        "【强制要求】以下所有字段都必须输出，即使没有信息也要输出默认值：",
+        "- pitfall_assessment: 必须有内容，无坑则写\"无明显坑位，建议正常投递\"",
+        "- match_score: 必须有0-100的整数",
+        "- strengths: 必须输出数组，至少2条匹配项",
+        "- gaps: 必须输出数组，至少2条缺口项",
+        "- resume_advice: 必须有简历修改建议",
+        "- self_intro: 必须有自荐话术，像BOSS直聘上发给HR的第一句话",
+        "",
+        "输出格式：",
         "{",
-        '  "pitfall_assessment": "坑位评估文字，无明显坑位则写\\"无明显坑位\\"",',
+        '  "pitfall_assessment": "坑位评估文字",',
         '  "match_score": 75,',
         '  "strengths": ["匹配项1", "匹配项2", "匹配项3"],',
         '  "gaps": ["缺口项1", "缺口项2", "缺口项3"],',
@@ -141,7 +171,7 @@ def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
         '  "self_intro": "您好，看到贵司在招XX岗位，我有X年XX经验，熟悉JD中提到的XX和XX，做过XX项目，期待有机会沟通。"',
         "}",
         "",
-        "注意：self_intro 是一句完整的打招呼消息，像BOSS直聘上发给HR的第一句话。必须提到JD中的具体技术栈或要求，语气自然不做作。",
+        "注意：self_intro 必须提到JD中的具体技术栈或要求，语气自然不做作。缺少任何字段都会导致程序错误。",
     ]
 
     if resume_text:
@@ -157,17 +187,15 @@ def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
 
     try:
         raw = api_result["content"]
-        print(f"[Vision] 原始返回(前300字): {raw[:300]}")
+        print(f"[Vision] 原始返回(全部): {raw}")
         result = _parse_json_response(raw)
 
-        result.setdefault("match_score", 0)
-        result.setdefault("pitfall_assessment", "")
-        result.setdefault("strengths", [])
-        result.setdefault("gaps", [])
-        result.setdefault("resume_advice", "")
-        result.setdefault("self_intro", "")
+        # 字段缺失自动补全
+        result = _ensure_job_analysis_fields(result)
+
         result["success"] = True
-        print(f"[Vision] 解析成功: match_score={result['match_score']}, "
+        print(f"[Vision] 解析成功: pitfall_assessment={bool(result['pitfall_assessment'])}, "
+              f"match_score={result['match_score']}, "
               f"strengths={len(result['strengths'])}, gaps={len(result['gaps'])}")
         return result
     except json.JSONDecodeError as e:
