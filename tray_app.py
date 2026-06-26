@@ -1725,18 +1725,11 @@ class TrayApplication:
                         f'面试助手 {data["company_name"]}',
                         first_suggestion
                     )
-                    show_result_popup(
-                        self.root,
-                        data["suggestions"],
-                        data["ocr_text"],
-                        data["company_name"]
-                    )
                 elif data["type"] == "interview_feedback":
                     show_notification(
                         f'面试助手(含评估) {data["company_name"]}',
                         '分析完成，含面试官视角评估'
                     )
-                    show_interview_feedback_popup(self.root, data)
                 elif data["type"] == "job":
                     result_data = data["data"]
                     match_score = result_data.get('match_score', 0)
@@ -1748,11 +1741,6 @@ class TrayApplication:
                         f'岗位分析 {data["company_name"]}',
                         summary
                     )
-                    show_job_result_popup(self.root, {
-                        **result_data,
-                        "company_name": data["company_name"],
-                        "window_title": data["window_title"],
-                    })
                 elif data["type"] == "error":
                     show_notification('求职助手', data.get("message", "分析失败"))
 
