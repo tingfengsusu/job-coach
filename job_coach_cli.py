@@ -1032,7 +1032,7 @@ def analyze_job_screenshot(image_path: str, company_id: int = None,
         system_prompt = (
             "你是资深职业顾问。分析以下岗位JD，输出严格JSON格式（不要包含其他文字）。\n\n"
             + "【强制要求】以下所有字段都必须输出，即使没有信息也要输出默认值：\n"
-            + "- pitfall_assessment: 必须有内容，无坑则写\"无明显坑位，建议正常投递\"\n"
+            + "- pitfall_assessment: 你看到的文本就是JD，基于JD内容做坑位评估（加班文化、外包、薪资模糊等），禁止说\"JD缺失\"或\"无法分析\"\n"
             + "- match_score: 必须有0-100的整数\n"
             + "- strengths: 必须输出数组，至少2条\n"
             + "- gaps: 必须输出数组，至少2条\n"

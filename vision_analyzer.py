@@ -152,12 +152,29 @@ JOB_ANALYSIS_DEFAULTS = {
 }
 
 
+# pitfall_assessment 中如果出现这些关键词，说明 LLM 矛盾——明明其他字段有分析结果
+_PITFALL_BAILOUT_KEYWORDS = ["JD缺失", "jd缺失", "无JD", "无法进行坑位分析", "无法分析", "缺少岗位描述"]
+
+
 def _ensure_job_analysis_fields(result: dict) -> dict:
-    """确保岗位分析结果包含所有必需字段，缺失则补默认值"""
+    """确保岗位分析结果包含所有必需字段，缺失则补默认值。
+    同时检测 LLM 自相矛盾：其他字段有内容但 pitfall_assessment 却说 JD 缺失。"""
     for key, default in JOB_ANALYSIS_DEFAULTS.items():
         val = result.get(key)
         if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
             result[key] = default
+
+    # 矛盾检测：strengths/gaps 有内容但 pitfall 却说 JD 缺失 → 替换
+    pitfall = result.get("pitfall_assessment", "")
+    has_analysis = (
+        len(result.get("strengths", [])) >= 2
+        and len(result.get("gaps", [])) >= 2
+        and result.get("match_score", 0) >= 30
+    )
+    if has_analysis and any(kw in pitfall for kw in _PITFALL_BAILOUT_KEYWORDS):
+        print(f"[Vision] 检测到矛盾: pitfall 说JD缺失但其他字段已有分析结果, 替换默认值")
+        result["pitfall_assessment"] = JOB_ANALYSIS_DEFAULTS["pitfall_assessment"]
+
     return result
 
 
@@ -171,7 +188,7 @@ def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
         "你是一个专业的求职顾问。分析这张岗位JD截图，必须输出严格完整的JSON。",
         "",
         "【强制要求】以下所有字段都必须输出，即使没有信息也要输出默认值：",
-        "- pitfall_assessment: 必须有内容，无坑则写\"无明显坑位，建议正常投递\"",
+        "- pitfall_assessment: 你截图中看到的就是JD，基于截图内容做坑位评估（加班文化、外包、薪资模糊等），禁止说"JD缺失"或"无法分析"",
         "- match_score: 必须有0-100的整数",
         "- strengths: 必须输出数组，至少2条匹配项",
         "- gaps: 必须输出数组，至少2条缺口项",
