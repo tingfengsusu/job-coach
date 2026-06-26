@@ -673,7 +673,7 @@ def _do_copy(text, widget):
 
 # ── 岗位分析结果弹窗 ──
 def show_job_result_popup(parent, data: dict):
-    """显示岗位JD分析结果——右下角无边框，8秒自动关闭"""
+    """显示岗位JD分析结果——右下角无边框，30秒自动关闭"""
     global _active_result_popup
     _close_active_popup()
     popup = tk.Toplevel(parent)
@@ -697,14 +697,14 @@ def show_job_result_popup(parent, data: dict):
     ttl.pack(side='left', pady=4)
 
     close_btn = tk.Label(
-        title_frame, text='✕ 8', fg='#cdd6f4', bg='#45475a',
+        title_frame, text='✕ 30', fg='#cdd6f4', bg='#45475a',
         font=tkfont.Font(size=10, weight='bold'), cursor='hand2',
         padx=10
     )
     close_btn.pack(side='right', pady=4)
     close_btn.bind('<Button-1>', lambda e: popup.destroy())
 
-    _setup_popup_timer(popup, close_btn)
+    _setup_popup_timer(popup, close_btn, timeout=30)
 
     # 内容区
     content = tk.Frame(popup, bg='#1e1e2e')
