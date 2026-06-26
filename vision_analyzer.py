@@ -74,6 +74,13 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
     b64_kb = len(image_b64) / 1024
     print(f"[Vision] base64 编码: {b64_kb:.0f}KB")
 
+    # 根据文件扩展名确定 MIME 类型
+    suffix = Path(image_path).suffix.lower()
+    mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
+    mime_type = mime_map.get(suffix, "image/png")
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
@@ -84,8 +91,10 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
         "messages": [
             {
                 "role": "user",
-                "content": prompt,
-                "image_data": image_b64
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                ]
             }
         ],
         "max_tokens": max_tokens,
