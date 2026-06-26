@@ -420,9 +420,27 @@ def _setup_popup_timer(popup, close_btn, timeout=8):
     return _pause, _resume
 
 
+# 弹窗单例：确保同时只有一个分析弹窗
+_active_result_popup = None
+
+
+def _close_active_popup():
+    """关闭当前活跃的分析弹窗"""
+    global _active_result_popup
+    if _active_result_popup is not None:
+        try:
+            _active_result_popup.destroy()
+        except Exception:
+            pass
+        _active_result_popup = None
+
+
 def show_interview_feedback_popup(parent, data: dict):
     """显示面试反馈结果——含原建议/面试官评估/优化建议三栏，12秒自动关闭"""
+    global _active_result_popup
+    _close_active_popup()
     popup = tk.Toplevel(parent)
+    _active_result_popup = popup
     popup.overrideredirect(True)
     popup.attributes('-topmost', True)
     popup.configure(bg='#313244', bd=1, relief='solid')
@@ -570,7 +588,10 @@ def show_interview_feedback_popup(parent, data: dict):
 
 def show_result_popup(parent, suggestions, ocr_preview, company_name=""):
     """显示分析结果弹出窗口——右下角无边框，8秒自动关闭"""
+    global _active_result_popup
+    _close_active_popup()
     popup = tk.Toplevel(parent)
+    _active_result_popup = popup
     popup.overrideredirect(True)
     popup.attributes('-topmost', True)
     popup.configure(bg='#313244', bd=1, relief='solid')
@@ -653,7 +674,10 @@ def _do_copy(text, widget):
 # ── 岗位分析结果弹窗 ──
 def show_job_result_popup(parent, data: dict):
     """显示岗位JD分析结果——右下角无边框，8秒自动关闭"""
+    global _active_result_popup
+    _close_active_popup()
     popup = tk.Toplevel(parent)
+    _active_result_popup = popup
     popup.overrideredirect(True)
     popup.attributes('-topmost', True)
     popup.configure(bg='#313244', bd=1, relief='solid')
@@ -1332,6 +1356,7 @@ class TrayApplication:
         self.config = load_config()
         self._running = True
         self._analyzing = False  # 分析状态锁，防止重复触发
+        self._last_hotkey_time = 0  # 热键防抖时间戳
         self.current_mode = self.config.get('default_mode', 'auto')
 
         # 队列：分析结果 → 主线程展示
@@ -1379,6 +1404,11 @@ class TrayApplication:
 
     def _on_hotkey(self, mode='auto'):
         """热键触发（在 keyboard 后台线程中调用）"""
+        now = time.time()
+        if now - self._last_hotkey_time < 0.5:
+            print(f"[热键] 防抖忽略 (间隔{now - self._last_hotkey_time:.2f}s)")
+            return
+        self._last_hotkey_time = now
         if self.config.get('enable_sound', True):
             try:
                 winsound.MessageBeep()
