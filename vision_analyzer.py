@@ -188,7 +188,7 @@ def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
         "你是一个专业的求职顾问。分析这张岗位JD截图，必须输出严格完整的JSON。",
         "",
         "【强制要求】以下所有字段都必须输出，即使没有信息也要输出默认值：",
-        "- pitfall_assessment: 你截图中看到的就是JD，基于截图内容做坑位评估（加班文化、外包、薪资模糊等），禁止说"JD缺失"或"无法分析"",
+        "- pitfall_assessment: 你截图中看到的就是JD，基于截图内容做坑位评估（加班文化、外包、薪资模糊等），禁止说'JD缺失'或'无法分析'",
         "- match_score: 必须有0-100的整数",
         "- strengths: 必须输出数组，至少2条匹配项",
         "- gaps: 必须输出数组，至少2条缺口项",
