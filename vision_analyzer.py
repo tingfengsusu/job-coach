@@ -64,20 +64,21 @@ def _call_text_api(prompt: str, max_tokens: int = 1024) -> dict:
 
 def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> dict:
     """
-    调用 DeepSeek 多模态 API。
+    调用 DeepSeek V4 多模态 API（image_data 格式）。
+    content 为纯文本，image_data 为 message 顶层字段，纯 base64 无前缀。
+
     返回: {"success": bool, "content": str} 或 {"success": False, "error": str}
     """
-    file_size_kb = Path(image_path).stat().st_size / 1024
-    print(f"[Vision] 图片尺寸: {file_size_kb:.0f}KB")
+    image_path_obj = Path(image_path)
+    if not image_path_obj.exists():
+        return {"success": False, "error": f"图片不存在: {image_path}"}
+
+    file_size_kb = image_path_obj.stat().st_size / 1024
+    print(f"[Vision] 图片: {image_path_obj.name} ({file_size_kb:.0f}KB)")
 
     image_b64 = _encode_image(image_path)
     b64_kb = len(image_b64) / 1024
-    print(f"[Vision] base64 编码: {b64_kb:.0f}KB")
-
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    print(f"[Vision] base64: {b64_kb:.0f}KB, 前20字符: {image_b64[:20]}")
 
     payload = {
         "model": VISION_MODEL,
@@ -85,46 +86,42 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
             {
                 "role": "user",
                 "content": prompt,
-                "image_data": image_b64
+                "image_data": image_b64,
             }
         ],
         "max_tokens": max_tokens,
-        "temperature": 0.2
+        "temperature": 0.1,
+    }
+
+    # 打印 payload 概要（不含 base64 数据体）
+    payload_summary = {
+        "model": payload["model"],
+        "messages": [{
+            "role": "user",
+            "content": prompt[:80] + "...",
+            "image_data": f"<base64, {b64_kb:.0f}KB>",
+        }],
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+    }
+    print(f"[Vision] payload: {payload_summary}")
+
+    url = f"{DEEPSEEK_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
     }
 
     try:
-        response = requests.post(
-            f"{DEEPSEEK_BASE_URL}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=(30, 120)  # (connect, read): 连接30秒，读取120秒（图片上传+推理）
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        if resp.status_code == 200:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
             return {"success": True, "content": content}
         else:
-            return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+            return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
     except requests.Timeout:
-        print("[Vision] 首次请求超时，重试一次...")
-        try:
-            response = requests.post(
-                f"{DEEPSEEK_BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=(30, 120)
-            )
-            if response.status_code == 200:
-                result = response.json()
-                content = result["choices"][0]["message"]["content"]
-                return {"success": True, "content": content}
-            else:
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
-        except requests.Timeout:
-            return {"success": False, "error": "请求超时（120秒重试后仍失败）"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        return {"success": False, "error": "请求超时（60秒）"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
