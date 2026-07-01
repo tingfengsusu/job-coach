@@ -238,6 +238,24 @@ def get_or_create_company_from_window_title(window_title: str) -> Optional[int]:
     import re
     title = window_title.strip()
 
+    # ── 预过滤：浏览器标签组、系统窗口等完全无效的标题 ──
+    _GARBAGE_TITLE_PATTERNS = [
+        r'^和另外\s*\d+\s*个页面',   # Chrome 标签组: 和另外 3 个页面 - 1 - xxx
+        r'^\d+个标签页',           # Edge 标签组
+        r'^\d+ tabs?$',           # 英文标签组
+        r'^用户配置\s*\d*$',       # Chrome 用户配置1
+        r'^个人资料\s*\d*$',       # Chrome 个人资料
+        r'^profile\s*\d*$',       # Chrome profile
+        r'^默认\s*$',             # 默认配置
+        r'^\d+[-–]\d+[-–]',       # 纯数字-符号残留 (如 3-1-xxx)
+        r'^新通知$',              # 系统通知
+        r'^未命名公司$',           # 已经是兜底值
+    ]
+    for pattern in _GARBAGE_TITLE_PATTERNS:
+        if re.match(pattern, title, re.IGNORECASE):
+            print(f"[公司检测] 无效窗口标题，跳过: {title[:60]}")
+            return None
+
     app_suffixes = [
         'google chrome', 'microsoft edge', 'firefox', 'opera', 'safari',
         'brave', 'chromium', 'internet explorer', 'edge',
@@ -266,7 +284,10 @@ def get_or_create_company_from_window_title(window_title: str) -> Optional[int]:
         if len(p) < 2 or len(p) > 40:
             continue
         is_app = any(
-            p.lower() == a.lower() or p.lower().endswith(' ' + a.lower())
+            p.lower() == a.lower()
+            or p.lower().endswith(' ' + a.lower())
+            or p.lower().startswith(a.lower() + ' ')
+            or p.lower().startswith(a.lower())  # 用户配置1, 和另外3个页面 等前缀匹配
             for a in app_suffixes
         )
         if not is_app:

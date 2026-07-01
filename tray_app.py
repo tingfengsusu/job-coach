@@ -127,6 +127,21 @@ def get_current_region(mode: str = 'auto') -> Optional[dict]:
 
 
 # ── 自动匹配公司 ──
+_INVALID_COMPANY_PATTERNS = [
+    '用户配置', '个人资料', 'profile', '默认', '未命名',
+    'google chrome', 'microsoft edge', 'firefox', 'chromium',
+    '新通知', '简历定制', 'boss直聘',
+]
+
+def _is_valid_company_name(name: str) -> bool:
+    if not name or len(name) < 2:
+        return False
+    name_lower = name.lower().strip()
+    for p in _INVALID_COMPANY_PATTERNS:
+        if name_lower.startswith(p) or name_lower == p:
+            return False
+    return True
+
 def auto_match_company(window_title: str) -> Optional[int]:
     """从窗口标题匹配数据库中的公司，返回 company_id 或 None。
     优先级：窗口标题匹配 > 上次分析的公司 > 默认公司"""
@@ -139,7 +154,7 @@ def auto_match_company(window_title: str) -> Optional[int]:
 
     for c in companies:
         name = c["name"]
-        if name and len(name) >= 2 and name in window_title:
+        if _is_valid_company_name(name) and len(name) >= 2 and name in window_title:
             return c["id"]
 
     return config.get("last_company_id") or config.get("default_company_id")
@@ -316,11 +331,13 @@ def capture_selection(parent, use_saved: bool = True, mode: str = 'auto') -> Opt
         region = get_current_region(mode)
         if region:
             bbox = (region['left'], region['top'], region['right'], region['bottom'])
+            print(f"[截图] 使用 {mode} 模式区域: {bbox}")
             try:
                 return ImageGrab.grab(bbox=bbox, all_screens=True)
             except Exception:
                 pass  # 坐标越界，降级为全屏
 
+    print(f"[截图] {mode} 模式无保存区域，使用全屏截图")
     return ImageGrab.grab(all_screens=True)
 
 
@@ -1698,7 +1715,7 @@ class TrayApplication:
     def _on_settings(self):
         show_settings_window(self.root)
 
-    def _on_exit(self):
+    def _on_exit(self, *args):
         self._running = False
         try:
             keyboard.unhook_all()
@@ -1804,7 +1821,7 @@ class TrayApplication:
             region_status_items.append(
                 pystray.MenuItem(
                     f'{prefix} {label}{is_current}',
-                    lambda mode=m: self.root.after(0, self._on_set_region_for_mode, mode),
+                    lambda *args, mode=m: self.root.after(0, self._on_set_region_for_mode, mode),
                     enabled=True
                 )
             )
@@ -1817,7 +1834,7 @@ class TrayApplication:
             mode_items.append(
                 pystray.MenuItem(
                     f'{prefix}{label} ({shortcut})',
-                    lambda mode=m: self.root.after(0, self._on_switch_mode, mode)
+                    lambda *args, mode=m: self.root.after(0, self._on_switch_mode, mode)
                 )
             )
 

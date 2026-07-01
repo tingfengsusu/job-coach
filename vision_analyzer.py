@@ -227,8 +227,16 @@ def analyze_job_with_vision(image_path: str, resume_text: str = None) -> dict:
         # 字段缺失自动补全
         result = _ensure_job_analysis_fields(result)
 
+        # 检测模型是否真的看到了图片
+        blind_keywords = ["未提供", "未能获取", "没有看到", "没有截图", "请上传", "请提供",
+                          "无法分析", "看不到", "no image", "unable to see", "JD缺失"]
+        pitfall = result.get("pitfall_assessment", "")
+        if any(kw in pitfall for kw in blind_keywords):
+            print("[Vision] 模型未接收到图片，返回失败触发 OCR 降级")
+            return {"success": False, "error": "模型未接收到图片数据"}
+
         result["success"] = True
-        print(f"[Vision] 解析成功: pitfall_assessment={bool(result['pitfall_assessment'])}, "
+        print(f"[Vision] 解析成功: pitfall_assessment={bool(pitfall)}, "
               f"match_score={result['match_score']}, "
               f"strengths={len(result['strengths'])}, gaps={len(result['gaps'])}")
         return result
@@ -271,8 +279,20 @@ JSON格式：
         raw = api_result["content"]
         print(f"[Vision] 原始返回(前300字): {raw[:300]}")
         result = _parse_json_response(raw)
+
+        # 检测模型是否真的看到了图片（DeepSeek API 文本模型会假装成功但说"未提供截图"）
+        blind_keywords = ["未提供", "未能获取", "没有看到", "没有截图", "请上传", "请提供",
+                          "无法分析", "未附带", "未发送", "未收到", "看不到", "no image",
+                          "unable to see", "cannot see", "no screenshot"]
+        intent = result.get("intent_analysis", "")
+        suggestions = result.get("suggestions", "")
+        combined = intent + suggestions
+        if any(kw in combined for kw in blind_keywords):
+            print("[Vision] 模型未接收到图片，返回失败触发 OCR 降级")
+            return {"success": False, "error": "模型未接收到图片数据"}
+
         result["success"] = True
-        print(f"[Vision] 面试解析成功: suggestions={len(result.get('suggestions', ''))}字")
+        print(f"[Vision] 面试解析成功: suggestions={len(suggestions)}字")
         return result
     except json.JSONDecodeError as e:
         print(f"[Vision] JSON解析失败: {e}")
