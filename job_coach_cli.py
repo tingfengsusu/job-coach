@@ -247,6 +247,9 @@ def get_or_create_company_from_window_title(window_title: str) -> Optional[int]:
         'visual studio code', 'vscode', 'intellij idea',
         'boss直聘', '智联招聘', '猎聘', '拉勾', '51job', '前程无忧', 'linkedin',
         '网易邮箱', 'outlook', 'gmail', 'foxmail',
+        # Chrome 多用户配置
+        '用户配置', '个人资料', 'profile', 'person',
+        '用户', '默认',
     ]
 
     # 按分隔符拆分
@@ -407,7 +410,7 @@ def build_enhanced_prompt(current_question: str, company_name: str,
     parts.append(f"\n## 面试官最新发言\n{current_question}")
     parts.append(
         '\n根据上面的上下文和面试官的最新发言，输出JSON格式（不要包含其他文字）:\n'
-        '{"suggestions": "回复策略建议（2-3条要点，需结合历史对话和公司背景）", '
+        '{"suggestions": "方案一：\\\\n可直接发送：<完整回复文本，50-150字>\\\\n策略说明：<为什么这样说>\\\\n\\\\n方案二：...（共3个方案，每个含完整回复+策略说明，风格差异化）", '
         '"analysis": "面试官意图分析和当前面试阶段判断"}'
     )
 
@@ -735,7 +738,7 @@ def analyze_screenshot_core(image_path: str, company_id: int = None,
         else:
             system_prompt = """你是求职面试教练。分析面试官的最新发言（从聊天截图OCR识别），输出JSON格式（不要包含其他文字）:
 {
-  "suggestions": "回复策略建议（2-3条要点）",
+  "suggestions": "三个完整回复方案，每个包含可直接发送的完整回复文本+策略说明，用换行分隔。格式：方案一：\\n可直接发送：xxx\\n策略说明：xxx\\n\\n方案二：...",
   "analysis": "面试官意图分析和建议的反问问题"
 }"""
 
@@ -854,14 +857,14 @@ def analyze_screenshot_core_with_feedback(
         }
 
     # Step 3: 优化建议
-    optimize_prompt = f"""你是面试辅导专家。根据面试官评估优化回答建议：
+    optimize_prompt = f"""你是面试辅导专家。根据面试官评估优化回复方案：
 
-原始回答建议：{suggestions_text}
+原始回复方案：{suggestions_text}
 面试官评估：{json.dumps(perspective, ensure_ascii=False)}
 
-请输出优化后的回答建议，严格JSON（不要markdown包裹）：
+请输出优化后的回复方案，严格JSON（不要markdown包裹）：
 {{
-  "optimized_suggestions": "优化后的回复策略建议（2-3条要点，字符串，用换行符分隔）"
+  "optimized_suggestions": "优化后的3个完整回复方案，每个包含可直接发送的回复文本+策略说明，用换行分隔。格式同原始方案"
 }}"""
 
     optimized = _call_llm_json(optimize_prompt)
@@ -1866,3 +1869,136 @@ def stop_monitor():
     print("监控未运行。")
     return False
 
+
+def import_jobs_json(filepath: str, dry_run: bool = False) -> dict:
+    """从 BOSS-Auto-Job-Semi 扩展导出的 JSON 导入岗位分析"""
+    import json
+    import os
+
+    if not os.path.exists(filepath):
+        return {"success": False, "error": f"文件不存在: {filepath}", "imported": 0, "skipped": 0}
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    records = data if isinstance(data, list) else data.get("records", [])
+    if not records:
+        return {"success": False, "error": "JSON 中没有岗位记录", "imported": 0, "skipped": 0}
+
+    imported = 0
+    skipped = 0
+    companies_created = 0
+
+    for rec in records:
+        title = (rec.get("title") or "").strip()
+        href = (rec.get("href") or "").strip()
+        if not title:
+            skipped += 1
+            continue
+
+        # 尝试提取公司名：BOSS 直聘标题常见格式 "岗位 - 公司名"
+        company_name = "待确认公司"
+        if " - " in title:
+            parts = title.rsplit(" - ", 1)
+            company_name = parts[1].strip()
+            if len(company_name) > 20:
+                company_name = "待确认公司"
+
+        jd_text = (rec.get("jdText") or "").strip()
+        greeting = (rec.get("greeting") or "").strip()
+        score = int(rec.get("score", 0))
+        hits = rec.get("hits", [])
+        negatives = rec.get("negatives", [])
+        main_reason = (rec.get("mainReason") or "").strip()
+
+        # 构建坑位评估
+        pitfall_parts = []
+        if negatives:
+            pitfall_parts.append("风险点: " + "; ".join(negatives[:5]))
+        if main_reason:
+            pitfall_parts.append("判断依据: " + main_reason)
+        pitfall = "\n".join(pitfall_parts) if pitfall_parts else "无明显坑位"
+
+        # 构建简历建议
+        resume_advice = ""
+        if hits:
+            resume_advice = "命中匹配点:\n" + "\n".join(f"- {h}" for h in hits[:5])
+        if negatives:
+            resume_advice += "\n\n需关注:\n" + "\n".join(f"- {n}" for n in negatives[:5])
+
+        if dry_run:
+            print(f"[DRY RUN] {title} | {company_name} | score={score} | greeting={greeting[:40]}...")
+            imported += 1
+            continue
+
+        # 查重：同一公司 + 相似标题
+        conn = get_db_connection()
+        company_id = get_or_create_company(company_name)
+        if company_id:
+            companies_created += 1 if not _company_existed(company_name) else 0
+
+        existing = conn.execute(
+            "SELECT id FROM job_analyses WHERE company_id = ? AND jd_text = ?",
+            (company_id, jd_text[:200])
+        ).fetchone()
+        conn.close()
+
+        if existing:
+            print(f"[跳过] 已存在: {title}")
+            skipped += 1
+            continue
+
+        try:
+            save_job_analysis(
+                company_id=company_id,
+                jd_text=jd_text or title,
+                pitfall_assessment=pitfall,
+                match_score=score,
+                strengths=hits if hits else ["扩展导入"],
+                gaps=negatives if negatives else ["待补充"],
+                resume_advice=resume_advice or "待补充",
+                self_intro=greeting or "待生成"
+            )
+            imported += 1
+            print(f"[导入] {title[:50]} | score={score}")
+        except Exception as e:
+            print(f"[失败] {title[:50]}: {e}")
+            skipped += 1
+
+    return {
+        "success": True,
+        "imported": imported,
+        "skipped": skipped,
+        "total": len(records),
+        "companies_created": companies_created
+    }
+
+
+def _company_existed(name: str) -> bool:
+    """检查公司是否已存在"""
+    conn = get_db_connection()
+    row = conn.execute("SELECT id FROM companies WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) >= 2 and sys.argv[1] == "import-jobs":
+        filepath = sys.argv[2] if len(sys.argv) >= 3 else None
+        if not filepath:
+            print("用法: python job_coach_cli.py import-jobs <jobs.json>")
+            sys.exit(1)
+        dry_run = "--dry-run" in sys.argv
+        result = import_jobs_json(filepath, dry_run=dry_run)
+        if result["success"]:
+            print(f"\n导入完成: {result['imported']} 条, 跳过 {result['skipped']} 条重复")
+            if result.get("companies_created"):
+                print(f"新建公司: {result['companies_created']} 个")
+        else:
+            print(f"导入失败: {result.get('error')}")
+            sys.exit(1)
+    else:
+        print("Job Coach CLI")
+        print("  python job_coach_cli.py import-jobs <jobs.json>  导入岗位JSON")
+        print("  python job_coach_cli.py import-jobs <jobs.json> --dry-run  预览模式")

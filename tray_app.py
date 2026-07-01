@@ -5,7 +5,7 @@
 
 启动方式:
     python tray_app.py
-    python tray_app.py --hotkey "ctrl+shift+a"
+    python tray_app.py --hotkey "alt+a"
 
 依赖:
     pip install pystray pillow easyocr langchain-openai pygetwindow pyperclip keyboard plyer
@@ -39,7 +39,7 @@ from job_coach_cli import (
     detect_content_type, detect_scene_lightweight,
     analyze_job_screenshot, tailor_resume,
     save_job_analysis, save_resume_version, load_resume_text,
-    get_or_create_company_from_window_title,
+    get_or_create_company_from_window_title, import_jobs_json,
     HAS_PYSTRAY, llm,
 )
 
@@ -58,7 +58,7 @@ CONFIG_DIR = Path.home() / ".job_coach"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
-    "hotkey": "ctrl+shift+x",
+    "hotkey": "alt+x",
     "auto_start": False,
     "default_company_id": None,
     "notification_enabled": True,
@@ -116,20 +116,11 @@ def save_regions(regions: dict):
         encoding='utf-8'
     )
 
-def get_active_region_name() -> str:
-    """从 config 获取当前激活的区域名称，默认 'default'"""
-    return config.get("active_region", "default")
-
-def set_active_region_name(name: str):
-    """保存当前激活的区域名称到 config"""
-    config["active_region"] = name
-    save_config(config)
-
-def get_current_region() -> Optional[dict]:
-    """获取当前激活区域的坐标，若未设置则返回 None"""
+def get_current_region(mode: str = 'auto') -> Optional[dict]:
+    """获取指定模式的截图区域坐标，若未设置则返回 None。
+    每个模式（auto/job/interview）独立记忆自己的截图区域。"""
     regions = load_regions()
-    name = get_active_region_name()
-    region = regions.get(name)
+    region = regions.get(mode)
     if region and region.get("left") is not None:
         return region
     return None
@@ -137,9 +128,10 @@ def get_current_region() -> Optional[dict]:
 
 # ── 自动匹配公司 ──
 def auto_match_company(window_title: str) -> Optional[int]:
-    """从窗口标题匹配数据库中的公司，返回 company_id 或 None"""
+    """从窗口标题匹配数据库中的公司，返回 company_id 或 None。
+    优先级：窗口标题匹配 > 上次分析的公司 > 默认公司"""
     if not window_title:
-        return config.get("default_company_id")
+        return config.get("last_company_id") or config.get("default_company_id")
 
     conn = get_db_connection()
     companies = conn.execute("SELECT id, name FROM companies ORDER BY LENGTH(name) DESC").fetchall()
@@ -150,7 +142,7 @@ def auto_match_company(window_title: str) -> Optional[int]:
         if name and len(name) >= 2 and name in window_title:
             return c["id"]
 
-    return config.get("default_company_id")
+    return config.get("last_company_id") or config.get("default_company_id")
 
 
 # ── 框选截图遮罩层 ──
@@ -318,53 +310,10 @@ def show_selection_overlay(parent) -> Optional[tuple]:
     return overlay.run_bbox()
 
 
-def prompt_for_region_name(parent) -> str:
-    """弹出输入框让用户输入区域名称，默认使用活动窗口标题"""
-    default_name = "default"
-    try:
-        active = gw.getActiveWindow()
-        if active and active.title:
-            default_name = active.title[:20]
-    except Exception:
-        pass
-
-    from tkinter import simpledialog
-    name = simpledialog.askstring(
-        "区域名称",
-        "请为截图区域命名（最多20字符）：",
-        initialvalue=default_name,
-        parent=parent
-    )
-    if name and name.strip():
-        return name.strip()[:20]
-    return default_name
-
-
-def set_region_interactive(parent, region_name: str = None) -> bool:
-    """交互式设置截图区域：框选 → 命名 → 保存 → 激活"""
-    bbox = show_selection_overlay(parent)
-    if not bbox:
-        return False
-
-    if region_name is None:
-        region_name = prompt_for_region_name(parent)
-
-    regions = load_regions()
-    regions[region_name] = {
-        "left": bbox[0], "top": bbox[1],
-        "right": bbox[2], "bottom": bbox[3],
-        "title": region_name
-    }
-    save_regions(regions)
-    set_active_region_name(region_name)
-    show_notification('区域已保存', f'截图区域 "{region_name}" 已设置并激活')
-    return True
-
-
-def capture_selection(parent, use_saved: bool = True) -> Optional[Image.Image]:
-    """截图函数：优先使用保存的区域，否则全屏截图"""
+def capture_selection(parent, use_saved: bool = True, mode: str = 'auto') -> Optional[Image.Image]:
+    """截图函数：优先使用当前模式保存的区域，否则全屏截图"""
     if use_saved:
-        region = get_current_region()
+        region = get_current_region(mode)
         if region:
             bbox = (region['left'], region['top'], region['right'], region['bottom'])
             try:
@@ -446,7 +395,7 @@ def show_interview_feedback_popup(parent, data: dict):
     popup.configure(bg='#313244', bd=1, relief='solid')
 
     sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
-    pw, ph = 480, 520
+    pw, ph = 520, 620
     popup.geometry(f'{pw}x{ph}+{sw - pw - 20}+{sh - ph - 80}')
 
     # 标题栏
@@ -524,10 +473,10 @@ def show_interview_feedback_popup(parent, data: dict):
     else:
         original_lines = original if isinstance(original, list) else []
 
-    original_text = tk.Text(content, height=3, bg='#313244', fg='#bac2de',
+    original_text = tk.Text(content, height=8, bg='#313244', fg='#bac2de',
                             font=tkfont.Font(size=9), wrap='word',
                             relief='flat', bd=4, padx=6, pady=4)
-    original_text.insert('1.0', '\n'.join(original_lines[:3]) if original_lines else original[:300])
+    original_text.insert('1.0', '\n'.join(original_lines) if original_lines else original[:2000])
     original_text.configure(state='disabled')
     original_text.pack(fill='x')
 
@@ -542,11 +491,11 @@ def show_interview_feedback_popup(parent, data: dict):
     else:
         optimized_lines = optimized if isinstance(optimized, list) else []
 
-    optimized_text = tk.Text(content, height=3, bg='#1e1e2e', fg='#cdd6f4',
+    optimized_text = tk.Text(content, height=8, bg='#1e1e2e', fg='#cdd6f4',
                              font=tkfont.Font(size=9), wrap='word',
                              relief='flat', bd=4, padx=6, pady=4,
                              highlightbackground='#a6e3a1', highlightthickness=1)
-    optimized_text.insert('1.0', '\n'.join(optimized_lines[:3]) if optimized_lines else optimized[:300])
+    optimized_text.insert('1.0', '\n'.join(optimized_lines) if optimized_lines else optimized[:2000])
     optimized_text.configure(state='disabled')
     optimized_text.pack(fill='x')
 
@@ -597,7 +546,7 @@ def show_result_popup(parent, suggestions, ocr_preview, company_name=""):
     popup.configure(bg='#313244', bd=1, relief='solid')
 
     sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
-    pw, ph = 400, 340
+    pw, ph = 420, 440
     popup.geometry(f'{pw}x{ph}+{sw - pw - 20}+{sh - ph - 80}')
 
     # 标题栏（拖动 + ✕关闭）
@@ -625,29 +574,24 @@ def show_result_popup(parent, suggestions, ocr_preview, company_name=""):
     content.pack(fill='both', expand=True, padx=10, pady=6)
 
     if isinstance(suggestions, str):
-        suggestions = [s.strip() for s in suggestions.split('\n') if s.strip()]
+        suggestions_text = suggestions
+    else:
+        suggestions_text = '\n'.join(suggestions) if suggestions else ''
 
-    for i, sug in enumerate(suggestions[:3]):
-        row = tk.Frame(content, bg='#1e1e2e')
-        row.pack(fill='x', pady=2)
+    sug_text = tk.Text(content, height=10, bg='#313244', fg='#cdd6f4',
+                       font=tkfont.Font(size=9), wrap='word',
+                       relief='flat', bd=4, padx=6, pady=4)
+    sug_text.insert('1.0', suggestions_text[:3000])
+    sug_text.configure(state='disabled')
+    sug_text.pack(fill='both', expand=True)
 
-        colors = ['#89b4fa', '#a6e3a1', '#fab387']
-        tk.Label(
-            row, text=f'{i+1}.', fg=colors[i % 3], bg='#1e1e2e',
-            font=tkfont.Font(size=10), width=2
-        ).pack(side='left')
-
-        tk.Label(
-            row, text=sug[:80], fg='#cdd6f4', bg='#1e1e2e',
-            font=tkfont.Font(size=9), anchor='w', wraplength=300, justify='left'
-        ).pack(side='left', fill='x', expand=True, padx=4)
-
-        cp = tk.Label(
-            row, text='复制', fg='#6c7086', bg='#1e1e2e',
-            font=tkfont.Font(size=8), cursor='hand2'
-        )
-        cp.pack(side='right', padx=2)
-        cp.bind('<Button-1>', lambda e, t=sug, w=cp: _do_copy(t, w))
+    # 复制按钮
+    copy_btn = tk.Button(
+        content, text='复制全部', bg='#a6e3a1', fg='#1e1e2e', relief='flat',
+        font=tkfont.Font(size=9, weight='bold'), padx=10, pady=4,
+        command=lambda: _do_copy(suggestions_text, copy_btn)
+    )
+    copy_btn.pack(pady=(6, 0))
 
     if ocr_preview:
         tk.Frame(content, bg='#45475a', height=1).pack(fill='x', pady=4)
@@ -1060,7 +1004,7 @@ class HistoryWindow:
 
         if not rows:
             tk.Label(
-                self.scroll_frame, text='暂无分析记录。\n按 Ctrl+Shift+X 开始截图分析。',
+                self.scroll_frame, text='暂无分析记录。\n按 Alt+X 开始截图分析。',
                 fg='#6c7086', bg='#1e1e2e', font=tkfont.Font(size=10)
             ).pack(pady=40)
             return
@@ -1133,7 +1077,7 @@ def show_settings_window(parent=None):
     hotkey_info = tk.Frame(win, bg='#313244')
     hotkey_info.pack(fill='x', padx=20, pady=(0, 6))
     tk.Label(
-        hotkey_info, text='Ctrl+Shift+Z  自动判断  |  Ctrl+Shift+X  岗位分析  |  Ctrl+Shift+C  面试辅助',
+        hotkey_info, text='Alt+Z  自动判断  |  Alt+X  岗位分析  |  Alt+C  面试辅助',
         fg='#cdd6f4', bg='#313244', font=tkfont.Font(size=9), padx=8, pady=6
     ).pack()
 
@@ -1312,7 +1256,7 @@ def show_settings_window(parent=None):
     # 保存按钮
     def _save():
         new_cfg = {
-            'hotkey': 'ctrl+shift+x',
+            'hotkey': 'alt+x',
             'auto_start': cfg.get('auto_start', False),
             'default_company_id': None,
             'default_mode': mode_var.get(),
@@ -1385,9 +1329,9 @@ class TrayApplication:
 
     def _start_hotkey(self):
         hotkeys = {
-            'ctrl+shift+z': 'auto',
-            'ctrl+shift+x': 'job',
-            'ctrl+shift+c': 'interview',
+            'alt+z': 'auto',
+            'alt+x': 'job',
+            'alt+c': 'interview',
         }
         for hotkey, mode in hotkeys.items():
             try:
@@ -1460,8 +1404,8 @@ class TrayApplication:
                     pass
             self.root.update_idletasks()
 
-            # 3. 截图（优先使用保存的区域，首次或重置后弹出框选）
-            image = capture_selection(self.root, use_saved=True)
+            # 3. 截图（每个模式独立记忆区域，无保存区域时全屏截图）
+            image = capture_selection(self.root, use_saved=True, mode=mode)
             if image is None:
                 return
 
@@ -1491,6 +1435,11 @@ class TrayApplication:
             print(f"截图分析出错: {e}")
         finally:
             self.root.config(cursor='')
+
+    def _save_last_company(self, company_id):
+        if company_id:
+            self.config["last_company_id"] = company_id
+            save_config(self.config)
 
     def _analyze_in_background(self, tmp_path, company_id, window_title, company_name, mode='auto'):
         """后台分析：根据模式执行 OCR / 多模态分析"""
@@ -1544,6 +1493,7 @@ class TrayApplication:
                             "type": "job", "data": result,
                             "company_name": company_name, "window_title": window_title,
                         })
+                        self._save_last_company(detected_cid or company_id)
                     else:
                         err_msg = result.get("pitfall_assessment") or "分析失败"
                         self.result_queue.put({"type": "error", "message": err_msg})
@@ -1564,6 +1514,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
+                            self._save_last_company(company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "面试分析失败"})
                     else:
@@ -1587,6 +1538,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
+                            self._save_last_company(detected_cid or company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "未能识别文字"})
             else:
@@ -1642,6 +1594,7 @@ class TrayApplication:
                             "type": "job", "data": result,
                             "company_name": company_name, "window_title": window_title,
                         })
+                        self._save_last_company(detected_cid or company_id)
                     else:
                         err_msg = result.get("pitfall_assessment") or result.get("ocr_text") or "未能识别文字"
                         self.result_queue.put({"type": "error", "message": err_msg})
@@ -1668,6 +1621,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
+                            self._save_last_company(detected_cid or company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "未能识别文字"})
                     else:
@@ -1690,6 +1644,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
+                            self._save_last_company(detected_cid or company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "未能识别文字"})
 
@@ -1754,34 +1709,37 @@ class TrayApplication:
         # 必须在主线程销毁 tk root
         self.root.after(200, self.root.destroy)
 
-    def _on_set_region(self):
-        """立即框选，保存到当前激活的区域"""
-        set_region_interactive(self.root, get_active_region_name())
-
-    def _on_new_region(self):
-        """框选并创建新区域"""
-        set_region_interactive(self.root, region_name=None)
-
-    def _on_overwrite_region(self, region_name):
-        """覆盖指定区域"""
-        set_region_interactive(self.root, region_name)
-
-    def _on_switch_region(self, region_name):
-        """切换到指定区域"""
+    def _set_region_for_mode(self, mode):
+        """框选并保存指定模式的截图区域"""
+        mode_names = {'auto': '自动判断', 'job': '岗位分析', 'interview': '面试辅助'}
+        mode_label = mode_names.get(mode, mode)
+        bbox = show_selection_overlay(self.root)
+        if not bbox:
+            return
         regions = load_regions()
-        region = regions.get(region_name)
-        title = region.get("title", region_name) if region else region_name
-        set_active_region_name(region_name)
-        show_notification('区域已切换', f'当前截图区域: {title}')
+        regions[mode] = {
+            "left": bbox[0], "top": bbox[1],
+            "right": bbox[2], "bottom": bbox[3],
+            "title": f"{mode_label}区域"
+        }
+        save_regions(regions)
+        show_notification('区域已保存', f'{mode_label}模式截图区域已设置')
+
+    def _on_set_region_for_mode(self, mode):
+        self._set_region_for_mode(mode)
+
+    def _on_set_region(self):
+        """框选并保存当前模式的截图区域"""
+        self._set_region_for_mode(self.current_mode)
 
     def _on_reset_region(self):
-        """删除当前区域的坐标配置，下次使用时重新框选"""
-        name = get_active_region_name()
+        """删除当前模式的区域坐标，下次使用时重新全屏截图"""
+        mode_names = {'auto': '自动判断', 'job': '岗位分析', 'interview': '面试辅助'}
+        mode_label = mode_names.get(self.current_mode, self.current_mode)
         regions = load_regions()
-        if name in regions:
-            regions[name] = None
-            save_regions(regions)
-            show_notification('区域已重置', f'"{name}" 区域已重置，下次使用将重新框选')
+        regions[self.current_mode] = None
+        save_regions(regions)
+        show_notification('区域已重置', f'{mode_label}模式区域已重置')
 
     def _on_set_resume(self):
         """打开文件选择器设置默认简历路径"""
@@ -1795,6 +1753,28 @@ class TrayApplication:
             self.config['default_resume_path'] = path
             save_config(self.config)
             show_notification('简历已设置', f'默认简历: {Path(path).name}')
+
+    def _on_import_jobs(self):
+        """导入 BOSS 扩展导出的岗位 JSON"""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title='选择岗位导出 JSON 文件',
+            filetypes=[('JSON 文件', '*.json'), ('所有文件', '*.*')],
+            initialdir=str(Path.home() / 'Downloads')
+        )
+        if not path:
+            return
+        try:
+            result = import_jobs_json(path)
+            if result["success"]:
+                show_notification(
+                    '导入完成',
+                    f'成功导入 {result["imported"]} 条岗位分析，跳过 {result["skipped"]} 条重复'
+                )
+            else:
+                show_notification('导入失败', result.get("error", "未知错误"))
+        except Exception as e:
+            show_notification('导入出错', str(e))
 
     def _on_open_resume_folder(self):
         """打开简历文件夹"""
@@ -1810,59 +1790,47 @@ class TrayApplication:
 
     def _make_tray_menu(self):
         regions = load_regions()
-        active_name = get_active_region_name()
+        mode_names = {'auto': '自动判断', 'job': '岗位分析', 'interview': '面试辅助'}
 
-        # 切换区域子菜单
-        switch_items = []
-        for name, r in regions.items():
+        # 区域状态摘要
+        region_status_items = []
+        for m, label in mode_names.items():
+            r = regions.get(m)
             if r and r.get("left") is not None:
-                prefix = "✓ " if name == active_name else "  "
-                title = r.get("title", name)
-                switch_items.append(
-                    pystray.MenuItem(
-                        f'{prefix}{title}',
-                        lambda n=name: self.root.after(0, self._on_switch_region, n)
-                    )
+                prefix = "✓"
+            else:
+                prefix = "✗"
+            is_current = " ←" if self.current_mode == m else ""
+            region_status_items.append(
+                pystray.MenuItem(
+                    f'{prefix} {label}{is_current}',
+                    lambda mode=m: self.root.after(0, self._on_set_region_for_mode, mode),
+                    enabled=True
                 )
-        if not switch_items:
-            switch_items.append(pystray.MenuItem('(无已保存区域)', None, enabled=False))
-
-        # 覆盖区域子菜单
-        overwrite_items = [pystray.MenuItem('新建区域...', lambda: self.root.after(0, self._on_new_region))]
-        saved_names = [name for name, r in regions.items() if r and r.get("left") is not None]
-        if saved_names:
-            overwrite_items.append(pystray.Menu.SEPARATOR)
-            for name in saved_names:
-                title = regions[name].get("title", name)
-                overwrite_items.append(
-                    pystray.MenuItem(
-                        f'覆盖"{title}"',
-                        lambda n=name: self.root.after(0, self._on_overwrite_region, n)
-                    )
-                )
+            )
 
         # 模式切换子菜单
-        mode_names = {'auto': '自动判断 (Ctrl+Shift+Z)', 'job': '岗位分析 (Ctrl+Shift+X)', 'interview': '面试辅助 (Ctrl+Shift+C)'}
         mode_items = []
         for m, label in mode_names.items():
+            shortcut = {'auto': 'Alt+Z', 'job': 'Alt+X', 'interview': 'Alt+C'}.get(m, '')
             prefix = "✓ " if self.current_mode == m else "  "
             mode_items.append(
                 pystray.MenuItem(
-                    f'{prefix}{label}',
+                    f'{prefix}{label} ({shortcut})',
                     lambda mode=m: self.root.after(0, self._on_switch_mode, mode)
                 )
             )
 
         items = [
-            pystray.MenuItem('📸 设置截图区域', lambda: self.root.after(0, self._on_set_region)),
-            pystray.MenuItem('📸 设置截图区域为...', pystray.Menu(*overwrite_items)),
-            pystray.MenuItem('📁 切换截图区域', pystray.Menu(*switch_items)),
+            pystray.MenuItem('📸 设置截图区域', pystray.Menu(*region_status_items)),
             pystray.MenuItem('🔄 重置当前区域', lambda: self.root.after(0, self._on_reset_region)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('🎯 分析模式', pystray.Menu(*mode_items)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('📄 设置默认简历', lambda: self.root.after(0, self._on_set_resume)),
             pystray.MenuItem('📁 打开简历文件夹', lambda: self.root.after(0, self._on_open_resume_folder)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem('📥 导入岗位分析', lambda: self.root.after(0, self._on_import_jobs)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('📋 查看历史', lambda: self.root.after(0, self._on_history), default=True),
             pystray.MenuItem('⚙ 设置', lambda: self.root.after(0, self._on_settings)),
@@ -1874,9 +1842,9 @@ class TrayApplication:
     def run(self):
         print(f"求职面试助手已启动")
         print(f"全局热键:")
-        print(f"  Ctrl+Shift+Z → 自动判断模式")
-        print(f"  Ctrl+Shift+X → 岗位分析模式")
-        print(f"  Ctrl+Shift+C → 面试辅助模式")
+        print(f"  Alt+Z → 自动判断模式")
+        print(f"  Alt+X → 岗位分析模式")
+        print(f"  Alt+C → 面试辅助模式")
         print(f"当前模式: {self.current_mode}")
         print(f"按热键进行截图分析，右键托盘图标查看更多选项。")
 
@@ -1905,7 +1873,7 @@ class TrayApplication:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='求职面试助手 - 托盘应用')
-    parser.add_argument('--hotkey', default=None, help='全局热键，默认 ctrl+shift+x')
+    parser.add_argument('--hotkey', default=None, help='全局热键，默认 alt+x')
     args = parser.parse_args()
 
     if args.hotkey:

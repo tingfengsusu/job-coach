@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-多模态分析模块 - 使用 DeepSeek V4 Flash 视觉模型直接分析截图
-使用 image_data 字段传递图片（纯 base64，无前缀），完全跳过 OCR
+多模态分析模块 - 使用 DeepSeek V4 视觉模型直接分析截图
+使用 image_data 字段传递图片（纯 base64，无 data URI 前缀），完全跳过 OCR
 """
 
 import os
@@ -74,13 +74,6 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
     b64_kb = len(image_b64) / 1024
     print(f"[Vision] base64 编码: {b64_kb:.0f}KB")
 
-    # 根据文件扩展名确定 MIME 类型
-    suffix = Path(image_path).suffix.lower()
-    mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
-    mime_type = mime_map.get(suffix, "image/png")
-    data_url = f"data:{mime_type};base64,{image_b64}"
-
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
@@ -91,10 +84,8 @@ def _call_vision_api(image_path: str, prompt: str, max_tokens: int = 2048) -> di
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_url}}
-                ]
+                "content": prompt,
+                "image_data": image_b64
             }
         ],
         "max_tokens": max_tokens,
@@ -252,14 +243,25 @@ def analyze_interview_with_vision(image_path: str) -> dict:
     使用多模态模型分析面试对话截图
     返回格式与 analyze_screenshot_core 兼容
     """
-    prompt = """你是面试辅助助手。分析这张聊天截图，输出严格JSON（不要markdown包裹）:
-{
-  "intent_analysis": "面试官问题的意图分析（50字以内）",
-  "suggestions": "回复策略建议（2-3条要点，字符串，用换行符分隔）",
-  "analysis": "详细分析和建议的反问问题"
-}"""
+    prompt = """你是面试辅助助手。分析这张聊天截图，输出严格JSON（不要markdown包裹）。
 
-    api_result = _call_vision_api(image_path, prompt)
+你需要生成的是【可以直接复制发送给面试官的完整回复文本】，而不仅仅是策略建议。
+
+JSON格式：
+{
+  "intent_analysis": "面试官问题的意图分析（30字以内）",
+  "suggestions": "方案一：\\n可直接发送：我对这个方向很感兴趣，之前在XX项目中做过类似的...\\n策略说明：用具体项目经验开场，证明你不是空谈\\n\\n方案二：\\n可直接发送：根据JD要求，我的技术栈和这个岗位很匹配...\\n策略说明：直接对标JD，体现你认真研究过岗位\\n\\n方案三：\\n可直接发送：我想先了解一下贵司对这个岗位的核心期待是什么？\\n策略说明：化被动为主动，通过反问掌握对话节奏",
+  "analysis": "详细分析和建议的反问问题"
+}
+
+关键要求：
+- suggestions 中每个方案都要包含「可直接发送」的完整回复文本（50-150字），以及「策略说明」（为什么这么回复有效）
+- 回复要自然口语化，像BOSS直聘上求职者真实会说的话
+- 每个方案的回复风格要有差异化（自信直接型/谦虚请教型/反问掌握主动型）
+- 共3个方案，用换行符分隔
+- 策略说明聚焦于：为什么这个回复能打动面试官/为什么这个角度切入有效"""
+
+    api_result = _call_vision_api(image_path, prompt, max_tokens=4096)
 
     if not api_result.get("success"):
         print(f"[Vision] 面试分析失败: {api_result.get('error')}")
@@ -298,12 +300,12 @@ def analyze_interview_with_feedback(image_path: str) -> dict:
     intent = initial.get("intent_analysis", "")
 
     # ── Step 2: 面试官视角评估 ──
-    assess_prompt = f"""你是资深面试官。评估以下面试回答建议：
+    assess_prompt = f"""你是资深面试官。评估以下面试回复方案（每个方案包含可直接发送的回复文本和策略说明）：
 
 面试官问题意图：{intent}
-回答建议：{suggestions_text}
+回复方案：{suggestions_text}
 
-从面试官视角评估这个回答（语气是否自信得体、逻辑是否清晰直接、深度是否足够有案例支撑），输出严格JSON（不要markdown包裹）：
+从面试官视角评估：回复文本是否自然得体、是否有具体案例支撑、策略是否有效，输出严格JSON（不要markdown包裹）：
 {{
   "assessment": "总体评价（一句话，50字以内）",
   "score": 0到100的整数,
@@ -332,16 +334,22 @@ def analyze_interview_with_feedback(image_path: str) -> dict:
         }
 
     # ── Step 3: 优化建议 ──
-    optimize_prompt = f"""你是面试辅导专家。根据面试官评估优化回答建议：
+    optimize_prompt = f"""你是面试辅导专家。根据面试官评估优化回复方案：
 
-原始回答建议：{suggestions_text}
+原始回复方案：{suggestions_text}
 面试官评估：{json.dumps(perspective, ensure_ascii=False)}
 
-请输出优化后的回答建议，严格JSON（不要markdown包裹）：
+请输出优化后的回复方案，严格JSON（不要markdown包裹）：
 {{
   "intent_analysis": "面试官问题意图（50字以内）",
-  "optimized_suggestions": "优化后的回复策略建议（2-3条要点，字符串，用换行符分隔）"
-}}"""
+  "optimized_suggestions": "优化后的完整回复方案（保持3个方案，每个方案含可直接发送的回复文本和策略说明，用换行符分隔）"
+}}
+
+优化要求：
+- 保留3个方案结构，每个方案包含可直接发送的回复文本 + 策略说明
+- 根据面试官评估优化的弱点和评分，改进回复用词和逻辑
+- 保持方案的差异化风格"""
+
 
     optimize_result = _call_text_api(optimize_prompt)
     optimized_suggestions = suggestions_text

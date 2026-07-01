@@ -68,9 +68,8 @@ for name in required_cli_funcs:
 required_tray_attrs = [
     "TrayApplication", "SelectionOverlay",
     "load_regions", "save_regions",
-    "get_active_region_name", "set_active_region_name", "get_current_region",
+    "get_current_region",
     "capture_selection", "show_selection_overlay",
-    "set_region_interactive", "prompt_for_region_name",
     "show_result_popup", "show_job_result_popup", "show_tailor_result_popup",
     "show_settings_window", "show_notification",
     "HistoryWindow", "auto_match_company",
@@ -284,8 +283,7 @@ try:
         "_analyze_in_background", "_poll_results",
         "_on_history", "_on_settings", "_on_exit",
         "_on_set_resume", "_on_open_resume_folder",
-        "_on_set_region", "_on_new_region", "_on_overwrite_region",
-        "_on_switch_region", "_on_reset_region",
+        "_on_set_region", "_on_set_region_for_mode", "_on_reset_region",
         "_make_tray_menu", "_make_icon_image", "run",
     ]:
         check(f"TrayApplication.{method}", hasattr(tray_app.TrayApplication, method))
