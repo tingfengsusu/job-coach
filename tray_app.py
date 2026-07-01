@@ -142,11 +142,22 @@ def _is_valid_company_name(name: str) -> bool:
             return False
     return True
 
+def _company_exists(company_id: int) -> bool:
+    """验证公司 ID 是否在数据库中仍然存在"""
+    if not company_id:
+        return False
+    conn = get_db_connection()
+    row = conn.execute("SELECT 1 FROM companies WHERE id = ?", (company_id,)).fetchone()
+    conn.close()
+    return row is not None
+
+
 def auto_match_company(window_title: str) -> Optional[int]:
     """从窗口标题匹配数据库中的公司，返回 company_id 或 None。
     优先级：窗口标题匹配 > 上次分析的公司 > 默认公司"""
     if not window_title:
-        return config.get("last_company_id") or config.get("default_company_id")
+        fallback = config.get("last_company_id") or config.get("default_company_id")
+        return fallback if _company_exists(fallback) else None
 
     conn = get_db_connection()
     companies = conn.execute("SELECT id, name FROM companies ORDER BY LENGTH(name) DESC").fetchall()
@@ -157,7 +168,8 @@ def auto_match_company(window_title: str) -> Optional[int]:
         if _is_valid_company_name(name) and len(name) >= 2 and name in window_title:
             return c["id"]
 
-    return config.get("last_company_id") or config.get("default_company_id")
+    fallback = config.get("last_company_id") or config.get("default_company_id")
+    return fallback if _company_exists(fallback) else None
 
 
 # ── 框选截图遮罩层 ──
@@ -1434,7 +1446,7 @@ class TrayApplication:
                 row = conn.execute("SELECT name FROM companies WHERE id = ?", (company_id,)).fetchone()
                 conn.close()
                 if row:
-                    company_name = f"({row['name']})"
+                    company_name = row["name"]
 
             # 5. 保存临时文件
             tmp_path = Path(tempfile.gettempdir()) / "job_coach_temp.png"
@@ -1500,17 +1512,20 @@ class TrayApplication:
                     )
                     print(f"[计时] 多模态岗位分析: 耗时 {time.time() - t_llm:.2f}s")
                     if result.get("success"):
-                        detected_cid = result.get("company_id")
-                        if not company_name and detected_cid:
-                            conn = get_db_connection()
-                            row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
-                            conn.close()
-                            company_name = f"({row['name']})" if row else ""
+                        if not company_name:
+                            company_name = result.get("company_name", "")
+                            if not company_name:
+                                detected_cid = result.get("company_id")
+                                if detected_cid:
+                                    conn = get_db_connection()
+                                    row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
+                                    conn.close()
+                                    company_name = row["name"] if row else ""
                         self.result_queue.put({
                             "type": "job", "data": result,
                             "company_name": company_name, "window_title": window_title,
                         })
-                        self._save_last_company(detected_cid or company_id)
+                        self._save_last_company(result.get("company_id") or company_id)
                     else:
                         err_msg = result.get("pitfall_assessment") or "分析失败"
                         self.result_queue.put({"type": "error", "message": err_msg})
@@ -1518,6 +1533,16 @@ class TrayApplication:
                     if enable_feedback:
                         # ── 面试反馈模式（多模态） ──
                         from vision_analyzer import analyze_interview_with_feedback
+                        # 公司检测：vision feedback 路径不经过 analyze_screenshot_core
+                        if not company_id and window_title:
+                            company_id = get_or_create_company_from_window_title(window_title)
+                        if not company_id:
+                            company_id = get_or_create_company("未命名公司")
+                        if not company_name and company_id:
+                            conn = get_db_connection()
+                            row = conn.execute("SELECT name FROM companies WHERE id = ?", (company_id,)).fetchone()
+                            conn.close()
+                            company_name = row["name"] if row else ""
                         feedback_result = analyze_interview_with_feedback(tmp_path)
                         print(f"[计时] 多模态面试+反馈: 耗时 {time.time() - t_llm:.2f}s")
                         if feedback_result.get("success"):
@@ -1541,12 +1566,15 @@ class TrayApplication:
                         )
                         print(f"[计时] 多模态面试分析: 耗时 {time.time() - t_llm:.2f}s")
                         if result.get("success"):
-                            detected_cid = result.get("company_id")
-                            if not company_name and detected_cid:
-                                conn = get_db_connection()
-                                row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
-                                conn.close()
-                                company_name = f"({row['name']})" if row else ""
+                            if not company_name:
+                                company_name = result.get("company_name", "")
+                                if not company_name:
+                                    detected_cid = result.get("company_id")
+                                    if detected_cid:
+                                        conn = get_db_connection()
+                                        row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
+                                        conn.close()
+                                        company_name = row["name"] if row else ""
                             self.result_queue.put({
                                 "type": "interview",
                                 "suggestions": result.get("suggestions", ""),
@@ -1555,7 +1583,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
-                            self._save_last_company(detected_cid or company_id)
+                            self._save_last_company(result.get("company_id") or company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "未能识别文字"})
             else:
@@ -1601,17 +1629,20 @@ class TrayApplication:
                     )
                     print(f"[计时] LLM 岗位分析: 耗时 {time.time() - t_llm:.2f}s")
                     if result.get("success"):
-                        detected_cid = result.get("company_id")
-                        if not company_name and detected_cid:
-                            conn = get_db_connection()
-                            row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
-                            conn.close()
-                            company_name = f"({row['name']})" if row else ""
+                        if not company_name:
+                            company_name = result.get("company_name", "")
+                            if not company_name:
+                                detected_cid = result.get("company_id")
+                                if detected_cid:
+                                    conn = get_db_connection()
+                                    row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
+                                    conn.close()
+                                    company_name = row["name"] if row else ""
                         self.result_queue.put({
                             "type": "job", "data": result,
                             "company_name": company_name, "window_title": window_title,
                         })
-                        self._save_last_company(detected_cid or company_id)
+                        self._save_last_company(result.get("company_id") or company_id)
                     else:
                         err_msg = result.get("pitfall_assessment") or result.get("ocr_text") or "未能识别文字"
                         self.result_queue.put({"type": "error", "message": err_msg})
@@ -1622,12 +1653,15 @@ class TrayApplication:
                         )
                         print(f"[计时] LLM 面试+反馈: 耗时 {time.time() - t_llm:.2f}s")
                         if result.get("success"):
-                            detected_cid = result.get("company_id")
-                            if not company_name and detected_cid:
-                                conn = get_db_connection()
-                                row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
-                                conn.close()
-                                company_name = f"({row['name']})" if row else ""
+                            if not company_name:
+                                company_name = result.get("company_name", "")
+                                if not company_name:
+                                    detected_cid = result.get("company_id")
+                                    if detected_cid:
+                                        conn = get_db_connection()
+                                        row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
+                                        conn.close()
+                                        company_name = row["name"] if row else ""
                             self.result_queue.put({
                                 "type": "interview_feedback",
                                 "original_suggestions": result.get("original_suggestions", ""),
@@ -1638,7 +1672,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
-                            self._save_last_company(detected_cid or company_id)
+                            self._save_last_company(result.get("company_id") or company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "未能识别文字"})
                     else:
@@ -1647,12 +1681,15 @@ class TrayApplication:
                         )
                         print(f"[计时] LLM 面试分析: 耗时 {time.time() - t_llm:.2f}s")
                         if result.get("success"):
-                            detected_cid = result.get("company_id")
-                            if not company_name and detected_cid:
-                                conn = get_db_connection()
-                                row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
-                                conn.close()
-                                company_name = f"({row['name']})" if row else ""
+                            if not company_name:
+                                company_name = result.get("company_name", "")
+                                if not company_name:
+                                    detected_cid = result.get("company_id")
+                                    if detected_cid:
+                                        conn = get_db_connection()
+                                        row = conn.execute("SELECT name FROM companies WHERE id = ?", (detected_cid,)).fetchone()
+                                        conn.close()
+                                        company_name = row["name"] if row else ""
                             self.result_queue.put({
                                 "type": "interview",
                                 "suggestions": result.get("suggestions", ""),
@@ -1661,7 +1698,7 @@ class TrayApplication:
                                 "company_name": company_name,
                                 "window_title": window_title,
                             })
-                            self._save_last_company(detected_cid or company_id)
+                            self._save_last_company(result.get("company_id") or company_id)
                         else:
                             self.result_queue.put({"type": "error", "message": "未能识别文字"})
 

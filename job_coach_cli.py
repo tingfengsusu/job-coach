@@ -813,6 +813,14 @@ def analyze_screenshot_core(image_path: str, company_id: int = None,
     else:
         print("[分析] 警告: company_id 为 None，无法保存面试分析")
 
+    if company_id is not None:
+        conn = get_db_connection()
+        row = conn.execute("SELECT name FROM companies WHERE id = ?", (company_id,)).fetchone()
+        conn.close()
+        result["company_name"] = row["name"] if row else ""
+    else:
+        result["company_name"] = ""
+
     result["company_id"] = company_id
     result["success"] = True
     return result
@@ -1174,6 +1182,7 @@ def analyze_job_screenshot(image_path: str, company_id: int = None,
         print("[分析] 警告: company_id 为 None，无法保存岗位分析")
 
     result["company_id"] = company_id
+    result["company_name"] = company_name
     result["success"] = True
     return result
 
